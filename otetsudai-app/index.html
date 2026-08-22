@@ -175,23 +175,11 @@
     background: var(--accent);
     color: white;
   }
-
-  .sync-banner {
-    text-align: center;
-    font-size: 0.85em;
-    color: var(--muted);
-    margin: -10px 0 16px;
-  }
-  .sync-banner.readonly {
-    color: var(--danger);
-    font-weight: bold;
-  }
 </style>
 </head>
 <body>
 
 <h1>🏠 おてつだいポイント</h1>
-<p class="sync-banner" id="sync-banner"></p>
 
 <section class="panel when-panel">
   <label for="when-date">📅 いつ</label>
@@ -239,10 +227,6 @@
 
 <script>
 const STORAGE_KEY = "otetsudai-app-data-v1";
-const DATA_FILE_PATH = "data/state.json";
-
-let artifactApi = null;   // resolved claude.use("artifact") namespace, or null
-let syncMode = "loading"; // "synced" | "local-only" | "read-only"
 
 function defaultData() {
   return {
@@ -286,84 +270,31 @@ function cryptoRandomId() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
-function normalizeData(parsed) {
-  if (!parsed || !parsed.children || !parsed.chores || !parsed.entries) return null;
-  parsed.entries.forEach(e => {
-    if (!e.date) {
-      const d = new Date(e.at || e.loggedAt || Date.now());
-      e.date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    }
-    if (!e.period) e.period = "朝";
-    if (!e.loggedAt) e.loggedAt = e.at || Date.now();
-  });
-  return parsed;
-}
-
-function loadLocalData() {
+function loadData() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return defaultData();
   try {
-    return normalizeData(JSON.parse(raw)) || defaultData();
+    const parsed = JSON.parse(raw);
+    if (!parsed.children || !parsed.chores || !parsed.entries) return defaultData();
+    parsed.entries.forEach(e => {
+      if (!e.date) {
+        const d = new Date(e.at || e.loggedAt || Date.now());
+        e.date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      }
+      if (!e.period) e.period = "朝";
+      if (!e.loggedAt) e.loggedAt = e.at || Date.now();
+    });
+    return parsed;
   } catch (e) {
     return defaultData();
   }
 }
 
-function saveLocalData() {
+function saveData() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-// Fetch the shared data file this artifact publishes to (relative to the
-// artifact's own served location). 404 just means nobody has logged
-// anything yet, so the default seed data is used.
-async function fetchSharedData() {
-  try {
-    const res = await fetch(DATA_FILE_PATH, { cache: "no-store" });
-    if (!res.ok) return null;
-    return normalizeData(await res.json());
-  } catch (e) {
-    return null;
-  }
-}
-
-let data = defaultData();
-
-async function initData() {
-  if (window.claude && typeof window.claude.use === "function") {
-    artifactApi = await window.claude.use("artifact").catch(() => null);
-  }
-  if (artifactApi) {
-    const shared = await fetchSharedData();
-    data = shared || defaultData();
-    syncMode = "synced";
-  } else {
-    data = loadLocalData();
-    syncMode = "local-only";
-  }
-  render();
-}
-
-// Persist the current in-memory `data` after a mutation: re-render
-// immediately for a snappy UI, then write through to the shared file
-// (or localStorage when the artifact capability isn't available here).
-async function persist() {
-  render();
-  if (!artifactApi) {
-    saveLocalData();
-    return;
-  }
-  try {
-    await artifactApi.publish({ [DATA_FILE_PATH]: JSON.stringify(data) });
-    syncMode = "synced";
-  } catch (err) {
-    if (err && (err.code === "not_writer" || err.code === "not_granted")) {
-      syncMode = "read-only";
-    }
-    // "conflict": another viewer just published first — the shell reloads
-    // every open view to the winning version, nothing more to do here.
-  }
-  renderSyncBanner();
-}
+let data = loadData();
 
 function pointsForChild(childId) {
   return data.entries
@@ -382,21 +313,6 @@ function render() {
   renderChildrenSettingsList();
   renderChoresSettingsList();
   renderPeriodButtons();
-  renderSyncBanner();
-}
-
-function renderSyncBanner() {
-  const banner = document.getElementById("sync-banner");
-  banner.classList.toggle("readonly", syncMode === "read-only");
-  if (syncMode === "synced") {
-    banner.textContent = "🔗 かぞくで共有中（このリンクを開いた人みんなに反映されます）";
-  } else if (syncMode === "read-only") {
-    banner.textContent = "👀 閲覧のみのリンクです（記録は保存されません）";
-  } else if (syncMode === "local-only") {
-    banner.textContent = "📴 この端末だけに保存されています（共有されません）";
-  } else {
-    banner.textContent = "";
-  }
 }
 
 function renderPeriodButtons() {
@@ -462,7 +378,8 @@ function logEntry(childId, choreId) {
     period: selectedPeriod,
     loggedAt: Date.now()
   });
-  persist();
+  saveData();
+  render();
 }
 
 function renderHistory() {
@@ -494,7 +411,8 @@ function renderHistory() {
     `;
     item.querySelector("button").addEventListener("click", () => {
       data.entries = data.entries.filter(e => e.id !== entry.id);
-      persist();
+      saveData();
+      render();
     });
     list.appendChild(item);
   });
@@ -513,7 +431,8 @@ function renderChildrenSettingsList() {
       if (!confirm(`${child.name} を削除しますか？（きろくも消えます）`)) return;
       data.children = data.children.filter(c => c.id !== child.id);
       data.entries = data.entries.filter(e => e.childId !== child.id);
-      persist();
+      saveData();
+      render();
     });
     li.appendChild(btn);
     list.appendChild(li);
@@ -533,7 +452,8 @@ function renderChoresSettingsList() {
       if (!confirm(`${chore.name} を削除しますか？（きろくも消えます）`)) return;
       data.chores = data.chores.filter(c => c.id !== chore.id);
       data.entries = data.entries.filter(e => e.choreId !== chore.id);
-      persist();
+      saveData();
+      render();
     });
     li.appendChild(btn);
     list.appendChild(li);
@@ -552,7 +472,8 @@ document.getElementById("add-child-btn").addEventListener("click", () => {
   if (!name) return;
   data.children.push({ id: cryptoRandomId(), name });
   input.value = "";
-  persist();
+  saveData();
+  render();
 });
 
 document.getElementById("add-chore-btn").addEventListener("click", () => {
@@ -564,19 +485,22 @@ document.getElementById("add-chore-btn").addEventListener("click", () => {
   data.chores.push({ id: cryptoRandomId(), name, points });
   nameInput.value = "";
   pointsInput.value = "10";
-  persist();
+  saveData();
+  render();
 });
 
 document.getElementById("reset-points-btn").addEventListener("click", () => {
   if (!confirm("すべての きろく（点数）をリセットしますか？")) return;
   data.entries = [];
-  persist();
+  saveData();
+  render();
 });
 
 document.getElementById("reset-all-btn").addEventListener("click", () => {
   if (!confirm("こども・おてつだい・きろく を すべてリセットしますか？")) return;
   data = defaultData();
-  persist();
+  saveData();
+  render();
 });
 
 document.getElementById("when-date").value = todayStr();
@@ -588,7 +512,7 @@ document.getElementById("period-buttons").addEventListener("click", (e) => {
   renderPeriodButtons();
 });
 
-initData();
+render();
 </script>
 
 </body>
