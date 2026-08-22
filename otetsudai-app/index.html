@@ -225,8 +225,24 @@
   </details>
 </section>
 
-<script>
-const STORAGE_KEY = "otetsudai-app-data-v1";
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import {
+  getFirestore, doc, getDoc, setDoc, onSnapshot
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyD16AHlapbRp2zGLsSMWsGZIUAh4cK7sXU",
+  authDomain: "otetsudai-6963a.firebaseapp.com",
+  projectId: "otetsudai-6963a",
+  storageBucket: "otetsudai-6963a.firebasestorage.app",
+  messagingSenderId: "821648427663",
+  appId: "1:821648427663:web:26c4ceb794cc20f29bbefa"
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+const stateDocRef = doc(db, "otetsudai", "state");
 
 function defaultData() {
   return {
@@ -270,31 +286,58 @@ function cryptoRandomId() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
-function loadData() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return defaultData();
+function normalizeData(parsed) {
+  if (!parsed || !parsed.children || !parsed.chores || !parsed.entries) return null;
+  parsed.entries.forEach(e => {
+    if (!e.date) {
+      const d = new Date(e.at || e.loggedAt || Date.now());
+      e.date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+    if (!e.period) e.period = "朝";
+    if (!e.loggedAt) e.loggedAt = e.at || Date.now();
+  });
+  return parsed;
+}
+
+let data = defaultData();
+let isSavingRemotely = false;
+
+async function initData() {
   try {
-    const parsed = JSON.parse(raw);
-    if (!parsed.children || !parsed.chores || !parsed.entries) return defaultData();
-    parsed.entries.forEach(e => {
-      if (!e.date) {
-        const d = new Date(e.at || e.loggedAt || Date.now());
-        e.date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      }
-      if (!e.period) e.period = "朝";
-      if (!e.loggedAt) e.loggedAt = e.at || Date.now();
-    });
-    return parsed;
+    const snap = await getDoc(stateDocRef);
+    if (snap.exists()) {
+      data = normalizeData(snap.data()) || defaultData();
+    } else {
+      data = defaultData();
+      await setDoc(stateDocRef, data);
+    }
   } catch (e) {
-    return defaultData();
+    console.error("Firestore load failed, showing local defaults", e);
+  }
+  render();
+
+  // Any device that writes to this same document updates every other
+  // open tab/phone in real time via this listener.
+  onSnapshot(stateDocRef, (snap) => {
+    if (isSavingRemotely) return; // ignore the echo of our own write
+    if (snap.exists()) {
+      data = normalizeData(snap.data()) || data;
+      render();
+    }
+  });
+}
+
+async function saveData() {
+  isSavingRemotely = true;
+  try {
+    await setDoc(stateDocRef, data);
+  } catch (e) {
+    console.error("Firestore save failed", e);
+    alert("保存に失敗しました。通信状態を確認してもう一度お試しください。");
+  } finally {
+    isSavingRemotely = false;
   }
 }
-
-function saveData() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-}
-
-let data = loadData();
 
 function pointsForChild(childId) {
   return data.entries
@@ -512,7 +555,7 @@ document.getElementById("period-buttons").addEventListener("click", (e) => {
   renderPeriodButtons();
 });
 
-render();
+initData();
 </script>
 
 </body>
