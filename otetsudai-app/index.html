@@ -144,11 +144,52 @@
   }
   .history-item .meta { color: var(--muted); font-size: 0.85em; }
   .empty-msg { color: var(--muted); text-align: center; padding: 12px; }
+
+  .when-panel {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .when-panel input[type=date] {
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 1em;
+  }
+  .period-buttons {
+    display: flex;
+    gap: 6px;
+  }
+  .period-btn {
+    padding: 8px 14px;
+    border: 2px solid var(--accent);
+    border-radius: 10px;
+    background: white;
+    color: var(--accent-dark);
+    cursor: pointer;
+    font-size: 1em;
+  }
+  .period-btn.active {
+    background: var(--accent);
+    color: white;
+  }
 </style>
 </head>
 <body>
 
 <h1>🏠 おてつだいポイント</h1>
+
+<section class="panel when-panel">
+  <label for="when-date">📅 いつ</label>
+  <input type="date" id="when-date">
+  <div class="period-buttons" id="period-buttons">
+    <button type="button" class="period-btn" data-period="朝">朝</button>
+    <button type="button" class="period-btn" data-period="昼">昼</button>
+    <button type="button" class="period-btn" data-period="夜">夜</button>
+  </div>
+</section>
 
 <div id="children-grid" class="children-grid"></div>
 
@@ -190,17 +231,40 @@ const STORAGE_KEY = "otetsudai-app-data-v1";
 function defaultData() {
   return {
     children: [
-      { id: cryptoRandomId(), name: "たろう" },
-      { id: cryptoRandomId(), name: "はなこ" }
+      { id: cryptoRandomId(), name: "ここね" },
+      { id: cryptoRandomId(), name: "なぎ" }
     ],
     chores: [
-      { id: cryptoRandomId(), name: "風呂", points: 10 },
-      { id: cryptoRandomId(), name: "洗濯", points: 10 },
-      { id: cryptoRandomId(), name: "飯炊", points: 15 }
+      { id: cryptoRandomId(), name: "風呂掃除and沸かす", points: 15 },
+      { id: cryptoRandomId(), name: "洗濯トリコみ", points: 10 },
+      { id: cryptoRandomId(), name: "洗濯たたみ", points: 10 },
+      { id: cryptoRandomId(), name: "洗濯干す", points: 10 },
+      { id: cryptoRandomId(), name: "洗い物", points: 10 },
+      { id: cryptoRandomId(), name: "こめたき", points: 15 },
+      { id: cryptoRandomId(), name: "ゴミ捨て", points: 5 }
     ],
-    entries: [] // { id, childId, choreId, points, at }
+    entries: [] // { id, childId, choreId, points, date: "YYYY-MM-DD", period: "朝"|"昼"|"夜", loggedAt }
   };
 }
+
+const PERIOD_ORDER = { "朝": 0, "昼": 1, "夜": 2 };
+
+function todayStr() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function currentPeriodGuess() {
+  const h = new Date().getHours();
+  if (h < 11) return "朝";
+  if (h < 17) return "昼";
+  return "夜";
+}
+
+let selectedPeriod = currentPeriodGuess();
 
 function cryptoRandomId() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -212,6 +276,14 @@ function loadData() {
   try {
     const parsed = JSON.parse(raw);
     if (!parsed.children || !parsed.chores || !parsed.entries) return defaultData();
+    parsed.entries.forEach(e => {
+      if (!e.date) {
+        const d = new Date(e.at || e.loggedAt || Date.now());
+        e.date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      }
+      if (!e.period) e.period = "朝";
+      if (!e.loggedAt) e.loggedAt = e.at || Date.now();
+    });
     return parsed;
   } catch (e) {
     return defaultData();
@@ -230,9 +302,9 @@ function pointsForChild(childId) {
     .reduce((sum, e) => sum + e.points, 0);
 }
 
-function formatTime(ts) {
-  const d = new Date(ts);
-  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+function formatDatePeriod(dateStr, period) {
+  const [y, m, d] = dateStr.split("-");
+  return `${parseInt(m, 10)}/${parseInt(d, 10)} ${period}`;
 }
 
 function render() {
@@ -240,6 +312,13 @@ function render() {
   renderHistory();
   renderChildrenSettingsList();
   renderChoresSettingsList();
+  renderPeriodButtons();
+}
+
+function renderPeriodButtons() {
+  document.querySelectorAll(".period-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.period === selectedPeriod);
+  });
 }
 
 function renderChildrenGrid() {
@@ -288,12 +367,16 @@ function renderChildrenGrid() {
 function logEntry(childId, choreId) {
   const chore = data.chores.find(c => c.id === choreId);
   if (!chore) return;
+  const dateInput = document.getElementById("when-date");
+  const date = dateInput.value || todayStr();
   data.entries.push({
     id: cryptoRandomId(),
     childId,
     choreId,
     points: chore.points,
-    at: Date.now()
+    date,
+    period: selectedPeriod,
+    loggedAt: Date.now()
   });
   saveData();
   render();
@@ -302,7 +385,13 @@ function logEntry(childId, choreId) {
 function renderHistory() {
   const list = document.getElementById("history-list");
   list.innerHTML = "";
-  const recent = [...data.entries].sort((a, b) => b.at - a.at).slice(0, 50);
+  const recent = [...data.entries].sort((a, b) => {
+    if (a.date !== b.date) return b.date < a.date ? -1 : 1;
+    const pa = PERIOD_ORDER[a.period] ?? 0;
+    const pb = PERIOD_ORDER[b.period] ?? 0;
+    if (pa !== pb) return pb - pa;
+    return (b.loggedAt || 0) - (a.loggedAt || 0);
+  }).slice(0, 50);
 
   if (recent.length === 0) {
     list.innerHTML = `<p class="empty-msg">まだ きろく がありません</p>`;
@@ -316,7 +405,7 @@ function renderHistory() {
     item.className = "history-item";
     item.innerHTML = `
       <span>${escapeHtml(child ? child.name : "?")} が ${escapeHtml(chore ? chore.name : "?")} (+${entry.points}pt)
-        <span class="meta">${formatTime(entry.at)}</span>
+        <span class="meta">${formatDatePeriod(entry.date, entry.period)}</span>
       </span>
       <button class="small danger" data-entry-id="${entry.id}">取消</button>
     `;
@@ -412,6 +501,15 @@ document.getElementById("reset-all-btn").addEventListener("click", () => {
   data = defaultData();
   saveData();
   render();
+});
+
+document.getElementById("when-date").value = todayStr();
+
+document.getElementById("period-buttons").addEventListener("click", (e) => {
+  const btn = e.target.closest(".period-btn");
+  if (!btn) return;
+  selectedPeriod = btn.dataset.period;
+  renderPeriodButtons();
 });
 
 render();
